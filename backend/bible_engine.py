@@ -391,6 +391,7 @@ class BibleEngine:
                 scores[lang] = {
                     "score": score,
                     "matches": len(matched_patterns),
+                    "matched_patterns": matched_patterns,
                     "total_patterns": len(patterns),
                     "confidence": min(1.0, len(matched_patterns) / max(3, len(patterns) * 0.5))
                 }
@@ -399,6 +400,9 @@ class BibleEngine:
             return {
                 "language": "Unknown",
                 "confidence": 0,
+                "confidence_label": "UNVERIFIED",
+                "reasoning": "No structural or semantic syntax signatures were detected.",
+                "context": "Agnostic",
                 "color": "#666666",
                 "alternatives": []
             }
@@ -406,10 +410,37 @@ class BibleEngine:
         # Sort by score descending
         ranked = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
         primary = ranked[0]
+        confidence = round(primary[1]["confidence"], 2)
+        
+        # Confidence label mapping
+        if confidence >= 0.8:
+            conf_label = "HIGH_AUTHORITY"
+        elif confidence >= 0.5:
+            conf_label = "VERIFIED_DOMAIN"
+        else:
+            conf_label = "LOW_CONFIDENCE"
+            
+        reasoning = f"Matched {primary[1]['matches']} deterministic syntax fingerprints (e.g., {primary[1]['matched_patterns'][0]})." if primary[1]['matches'] else "Inferred via secondary heuristics."
+        
+        # Context Mapping
+        context_map = {
+            "Python": "Standard Library / CPython",
+            "Bash": "Unix Shell Environment",
+            "PowerShell": "Windows Management Framework",
+            "SQL": "Relational Database Engine",
+            "JavaScript": "Browser Engine / Node.js Runtime",
+            "Docker": "Container Daemon",
+            "Kubernetes": "Cluster Control Plane",
+            "Git": "Version Control System",
+            "Rust": "Rustc Compilation Environment"
+        }
 
         return {
             "language": primary[0],
-            "confidence": round(primary[1]["confidence"], 2),
+            "confidence": confidence,
+            "confidence_label": conf_label,
+            "reasoning": reasoning,
+            "context": context_map.get(primary[0], f"{primary[0]} Runtime Environment"),
             "color": DOMAIN_COLORS.get(primary[0], "#C9A84C"),
             "alternatives": [
                 {"language": lang, "confidence": round(data["confidence"], 2)}
@@ -431,13 +462,23 @@ class BibleEngine:
                 safe_notes.append(desc)
 
         if warnings:
-            return {"level": "danger", "warnings": warnings, "safe_notes": []}
+            return {"level": "DESTRUCTIVE", "warnings": warnings, "safe_notes": []}
         elif safe_notes:
-            return {"level": "safe", "warnings": [], "safe_notes": safe_notes}
+            return {"level": "SAFE", "warnings": [], "safe_notes": safe_notes}
         else:
-            return {"level": "neutral", "warnings": [], "safe_notes": []}
+            return {"level": "CAUTION", "warnings": [], "safe_notes": ["Operation lacks explicitly recognized safe boundaries. Execution requires context validation."]}
 
     # ─── FTS5 Search ─────────────────────────────────────────
+    def _format_tier(self, raw_tier: str) -> str:
+        t = (raw_tier or "").upper()
+        if "A" in t or "OFFICIAL" in t:
+            return "Tier A (Official)"
+        elif "B" in t or "MAN" in t:
+            return "Tier B (Man Pages)"
+        elif "C" in t or "DERIVED" in t:
+            return "Tier C (Derived/Community)"
+        return "Tier C (Derived)"
+
     def search(self, query: str, limit: int = 20, language: str = None) -> list:
         """Search the Bible via FTS5 with optional language-domain filtering."""
         clean_query = self._sanitize_fts_query(query)
@@ -453,6 +494,8 @@ class BibleEngine:
         if language and language in LANGUAGE_SOURCE_MAP:
             domain_results = self._search_domain(clean_query, language, limit)
             for r in domain_results:
+                if not r.get("tier"):
+                    r["tier"] = self._map_source_to_tier(r.get("source", ""))
                 results.append(r)
                 seen_ids.add(r["id"])
 
@@ -492,13 +535,23 @@ class BibleEngine:
                     "id": row["id"],
                     "content": row["content"][:500],
                     "source": row["source"],
-                    "tier": row["tier"],
+                    "tier": row["tier"] if row["tier"] else self._map_source_to_tier(row["source"]),
                     "relevance": round(abs(row["rank"]), 4)
                 }
                 for row in cursor
             ]
         except sqlite3.OperationalError:
             return []
+
+    def _map_source_to_tier(self, source: str) -> str:
+        """Deterministically map source URLs to evidence tiers."""
+        source_lower = source.lower()
+        if any(x in source_lower for x in ["docs.python.org", "developer.mozilla.org", "man7.org", "gnu.org", "postgresql.org/docs"]):
+            return "Official"
+        elif any(x in source_lower for x in ["man page", "man", "tldr"]):
+            return "Man"
+        else:
+            return "Derived"
 
     def _search_fts(self, fts_query: str, limit: int) -> list:
         """Raw FTS5 search without domain filter."""
@@ -537,7 +590,7 @@ class BibleEngine:
                 "id": row["id"],
                 "content": row["content"][:500],
                 "source": row["source"],
-                "tier": row["tier"],
+                "tier": self._format_tier(row["tier"]),
                 "relevance": 0.5
             }
             for row in cursor
@@ -599,6 +652,29 @@ class BibleEngine:
         (r'\b(encrypt|decrypt|hash|hmac|sha|md5)\b', 'cryptography security'),
         (r'\b(test|assert|expect|mock)\b', 'testing unit test'),
     ]
+
+    def decompose_snippet(self, snippet: str) -> list:
+        """Decompose the snippet into semantic chunks (Breakdown)."""
+        breakdown = []
+        lines = snippet.strip().split("\n")
+        
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            
+            matched_concept = None
+            for pattern, concept in self.CONCEPT_PATTERNS:
+                if re.search(pattern, line_str, re.IGNORECASE):
+                    matched_concept = concept
+                    break
+                    
+            if matched_concept:
+                breakdown.append({"code": line_str, "concept": matched_concept.title()})
+            elif len(line_str) > 3 and not line_str.startswith(("#", "//", "/*")):
+                breakdown.append({"code": line_str, "concept": "Operation / Declaration"})
+        
+        return breakdown
 
     def _extract_concepts(self, snippet: str) -> list:
         """Extract high-level programming concepts from code structure."""
@@ -670,6 +746,7 @@ class BibleEngine:
             "language": detection,
             "safety": safety,
             "keywords": keywords + concepts,
+            "breakdown": self.decompose_snippet(snippet),
             "results": results[:15],
             "result_count": len(results),
             "total_fragments": self._get_total_count(),
