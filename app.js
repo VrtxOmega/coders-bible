@@ -19,8 +19,11 @@ const els = {
     langBadge: document.getElementById('lang-badge'),
     langName: document.getElementById('lang-name'),
     langConfidence: document.getElementById('lang-confidence'),
+    langReasoning: document.getElementById('lang-reasoning'),
     inputPreview: document.getElementById('input-preview'),
     alternatives: document.getElementById('alternatives'),
+    breakdownCard: document.getElementById('breakdown-card'),
+    breakdownBody: document.getElementById('breakdown-body'),
     safetyIcon: document.getElementById('safety-icon'),
     safetyBody: document.getElementById('safety-body'),
     keywordsBody: document.getElementById('keywords-body'),
@@ -114,9 +117,21 @@ function renderResults(data) {
     const lang = data.language;
     els.langName.textContent = lang.language;
     els.langName.style.color = lang.color;
-    els.langConfidence.textContent = `${Math.round(lang.confidence * 100)}% confidence`;
+    
+    // Use confidence_label if provided, otherwise fallback to percentage
+    const confLabel = data.confidence_label ? `${data.confidence_label} (${Math.round(lang.confidence * 100)}%)` : `${Math.round(lang.confidence * 100)}% confidence`;
+    els.langConfidence.textContent = confLabel;
+    
     els.langBadge.style.borderColor = lang.color + '40';
     els.inputPreview.textContent = data.input;
+
+    // Reasoning
+    if (data.reasoning) {
+        els.langReasoning.style.display = 'block';
+        els.langReasoning.textContent = data.reasoning;
+    } else {
+        els.langReasoning.style.display = 'none';
+    }
 
     // Alternatives
     if (lang.alternatives && lang.alternatives.length > 0) {
@@ -137,6 +152,19 @@ function renderResults(data) {
         ).join('');
     } else {
         els.keywordsBody.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No keywords extracted</span>';
+    }
+
+    // Breakdown / Decomposition
+    if (data.breakdown && data.breakdown.length > 0) {
+        els.breakdownCard.style.display = 'block';
+        els.breakdownBody.innerHTML = data.breakdown.map(item => `
+            <div style="background: rgba(255,255,255,0.02); padding: 8px 12px; border-radius: 4px; border-left: 2px solid var(--accent-blue);">
+                <div style="font-weight: 500; font-size: 13px; color: var(--text-main); margin-bottom: 2px;">${escapeHtml(item.concept)}</div>
+                <div style="font-size: 12px; color: var(--text-muted);">${escapeHtml(item.description)}</div>
+            </div>
+        `).join('');
+    } else {
+        els.breakdownCard.style.display = 'none';
     }
 
     // Bible Results

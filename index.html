@@ -97,11 +97,21 @@
                         <span class="lang-name" id="lang-name">—</span>
                         <span class="lang-confidence" id="lang-confidence">—%</span>
                     </div>
+                    <div id="lang-reasoning" class="lang-reasoning" style="margin-top: 10px; font-size: 13px; color: var(--text-muted); padding-left: 10px; border-left: 2px solid var(--accent-gold);"></div>
                     <div class="detection-meta">
                         <div id="input-preview" class="input-preview"></div>
                         <div id="alternatives" class="alternatives"></div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Breakdown Card -->
+            <div id="breakdown-card" class="result-card breakdown-card" style="display: none;">
+                <div class="card-header">
+                    <div class="card-icon">🧩</div>
+                    <h3>Semantic Decomposition</h3>
+                </div>
+                <div id="breakdown-body" class="breakdown-body" style="display: flex; flex-direction: column; gap: 8px;"></div>
             </div>
 
             <!-- Safety Card -->
