@@ -232,6 +232,15 @@ DOMAIN_COLORS = {
     "YAML": "#CB171E",
     "JSON": "#292929",
     "Terraform": "#7B42BC",
+    "C#": "#239120",
+    "Kotlin": "#7F52FF",
+    "C/C++": "#00599C",
+    "Swift": "#F05138",
+    "Linux": "#FCC624",
+    "Node.js": "#339933",
+    "MySQL": "#4479A1",
+    "PostgreSQL": "#336791",
+    "Other": "#666666",
 }
 
 # ─── Language-to-Source Routing ───────────────────────────────
@@ -785,8 +794,16 @@ class BibleEngine:
                         WHEN source LIKE '%ansible%' THEN 'Ansible'
                         WHEN source LIKE '%docker%' THEN 'Docker'
                         WHEN source LIKE '%kubernetes%' OR source LIKE '%k8s%' THEN 'Kubernetes'
-                        WHEN source LIKE '%git-scm%' OR source LIKE '%git/%' THEN 'Git'
+                        WHEN source LIKE '%git-scm%' OR source LIKE 'git/%' THEN 'Git'
                         WHEN source LIKE '%bash%' OR source LIKE '%gnu.org/software/bash%' THEN 'Bash'
+                        WHEN source LIKE 'c/%' OR source LIKE 'cpp/%' OR source LIKE '%cppreference%' THEN 'C/C++'
+                        WHEN source LIKE 'css/%' OR source LIKE '%/CSS/%' THEN 'CSS'
+                        WHEN source LIKE 'html/%' OR source LIKE '%/HTML/%' THEN 'HTML'
+                        WHEN source LIKE 'terraform/%' OR source LIKE '%hashicorp%' THEN 'Terraform'
+                        WHEN source LIKE 'csharp/%' OR source LIKE '%dotnet/csharp%' THEN 'C#'
+                        WHEN source LIKE 'sql/%' OR source LIKE '%w3schools%sql%' THEN 'SQL'
+                        WHEN source LIKE 'kotlin/%' OR source LIKE '%kotlinlang%' THEN 'Kotlin'
+                        WHEN source LIKE 'swift/%' OR source LIKE '%swift.org%' THEN 'Swift'
                         ELSE 'Other'
                     END as domain,
                     COUNT(*) as count
