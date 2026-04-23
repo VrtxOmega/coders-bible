@@ -376,14 +376,41 @@ async function analyzeSnippet(snippet) {
 }
 
 function renderAnalysis(data) {
-    // Quick Understanding — one-line plain-English summary
+    // ── At a Glance — structured {what, why, effect} synthesis ──
     const quContainer = document.getElementById('quick-understanding');
     if (quContainer && data.quick_understanding) {
         quContainer.style.display = 'block';
-        quContainer.innerHTML = `<div class="qu-panel">
-            <span class="qu-icon">⚡</span>
-            <span class="qu-text">${escapeHtml(data.quick_understanding)}</span>
-        </div>`;
+        const qu = data.quick_understanding;
+
+        // Support both structured object and legacy flat string
+        if (typeof qu === 'object' && qu.what) {
+            quContainer.innerHTML = `<div class="qu-panel qu-structured">
+                <div class="qu-header">
+                    <span class="qu-icon">⚡</span>
+                    <span class="qu-title">At a Glance</span>
+                </div>
+                <div class="qu-grid">
+                    <div class="qu-row">
+                        <span class="qu-label">WHAT</span>
+                        <span class="qu-value">${escapeHtml(qu.what)}</span>
+                    </div>
+                    <div class="qu-row">
+                        <span class="qu-label">WHY</span>
+                        <span class="qu-value">${escapeHtml(qu.why)}</span>
+                    </div>
+                    <div class="qu-row">
+                        <span class="qu-label">RUNS</span>
+                        <span class="qu-value">${escapeHtml(qu.effect)}</span>
+                    </div>
+                </div>
+            </div>`;
+        } else {
+            // Flat string fallback
+            quContainer.innerHTML = `<div class="qu-panel">
+                <span class="qu-icon">⚡</span>
+                <span class="qu-text">${escapeHtml(String(qu))}</span>
+            </div>`;
+        }
     } else if (quContainer) {
         quContainer.style.display = 'none';
     }
@@ -428,6 +455,21 @@ function renderAnalysis(data) {
     } else {
         safetyIcon.textContent = '🟡';
         safetyBody.innerHTML = `<div class="safety-caution">⚠️ ${(safety.safe_notes||[]).join(', ')}</div>`;
+    }
+
+    // ── Prerequisites — what must exist before this runs ──
+    const prereqs = data.prerequisites || [];
+    const prereqContainer = document.getElementById('prerequisites');
+    if (prereqContainer && prereqs.length > 0) {
+        prereqContainer.style.display = 'block';
+        prereqContainer.innerHTML = `<div class="prereq-panel">
+            <span class="prereq-label">Prerequisites</span>
+            <div class="prereq-badges">${prereqs.map(p =>
+                `<span class="prereq-badge">${escapeHtml(p)}</span>`
+            ).join('')}</div>
+        </div>`;
+    } else if (prereqContainer) {
+        prereqContainer.style.display = 'none';
     }
 
     // Keywords
