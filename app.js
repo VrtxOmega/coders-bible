@@ -4,7 +4,7 @@
  * Command Palette (Ctrl+K), animated counters, particle canvas
  */
 
-const API = '';
+const API = 'http://127.0.0.1:5090';
 
 function escapeHtml(str) {
     const d = document.createElement('div');

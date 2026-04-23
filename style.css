@@ -146,13 +146,31 @@ header {
     gap: 16px;
 }
 
+.logo-mark {
+    position: relative;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.logo-ring {
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--gold);
+    border-radius: 50%;
+    opacity: 0.8;
+    box-shadow: 0 0 15px var(--gold-glow);
+}
+
 .omega-mark {
-    font-family: var(--font-serif);
-    font-size: 32px;
+    font-family: 'Georgia', serif;
+    font-size: 34px;
     color: var(--gold);
     text-shadow: 0 0 24px var(--gold-glow);
     line-height: 1;
-    transform: translateY(2px);
+    transform: translateY(-2px); /* Optically center the Georgia Omega */
 }
 
 .header-title h1 {
