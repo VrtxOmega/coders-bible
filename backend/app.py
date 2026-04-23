@@ -1,5 +1,5 @@
 """
-Coder's Bible — Flask API Server
+The Coder's Bible — Flask API Server
 Port: 5090
 Serves the Bible search API + static frontend.
 """

@@ -1,5 +1,5 @@
 """
-Coder's Bible — Knowledge Engine
+The Coder's Bible — Knowledge Engine
 Queries the 53,018-fragment Bible database via FTS5.
 Language detection via regex fingerprints + source analysis.
 """
@@ -363,7 +363,7 @@ SAFE_PATTERNS = [
 
 
 class BibleEngine:
-    """Core engine for the Coder's Bible knowledge base."""
+    """Core engine for the The Coder's Bible knowledge base."""
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path or DB_PATH
@@ -382,10 +382,134 @@ class BibleEngine:
             self._conn = None
 
     # ─── Language Detection ──────────────────────────────────
+    # ─── Known CLI Binaries for Confidence Boosting ────────────
+    # When the leading token of a snippet matches a known binary,
+    # we apply a deterministic confidence floor of 0.70 — because
+    # we KNOW what this is, even on short inputs.
+    KNOWN_BINARIES = {
+        # Shell / Unix
+        'chmod': ('Bash', 'Changes file permissions (read/write/execute) for users, groups, or everyone.'),
+        'chown': ('Bash', 'Changes the owner and/or group of a file or directory.'),
+        'chgrp': ('Bash', 'Changes the group ownership of a file or directory.'),
+        'mkdir': ('Bash', 'Creates a new directory (folder) at the specified path.'),
+        'rmdir': ('Bash', 'Removes an empty directory.'),
+        'cp': ('Bash', 'Copies files or directories from one location to another.'),
+        'mv': ('Bash', 'Moves or renames files and directories.'),
+        'rm': ('Bash', 'Deletes files or directories. Use with caution.'),
+        'ls': ('Bash', 'Lists the contents of a directory.'),
+        'cat': ('Bash', 'Displays the contents of a file.'),
+        'grep': ('Bash', 'Searches for text patterns inside files.'),
+        'awk': ('Bash', 'Processes and transforms structured text data.'),
+        'sed': ('Bash', 'Edits text in a stream or file using pattern matching.'),
+        'find': ('Bash', 'Searches for files and directories matching specified criteria.'),
+        'tar': ('Bash', 'Creates or extracts compressed archive files.'),
+        'curl': ('Bash', 'Transfers data to or from a server using URLs.'),
+        'wget': ('Bash', 'Downloads files from the internet.'),
+        'ssh': ('Bash', 'Opens a secure remote shell connection to another machine.'),
+        'scp': ('Bash', 'Copies files securely between machines over SSH.'),
+        'rsync': ('Bash', 'Synchronizes files between directories or machines efficiently.'),
+        'sudo': ('Bash', 'Runs a command with administrator (root) privileges.'),
+        'apt': ('Bash', 'Installs, updates, or removes packages on Debian/Ubuntu systems.'),
+        'yum': ('Bash', 'Installs, updates, or removes packages on RHEL/CentOS systems.'),
+        'dnf': ('Bash', 'Installs, updates, or removes packages on Fedora systems.'),
+        'brew': ('Bash', 'Installs, updates, or removes packages on macOS.'),
+        'pacman': ('Bash', 'Installs, updates, or removes packages on Arch Linux.'),
+        'systemctl': ('Bash', 'Controls system services (start, stop, enable, disable).'),
+        'journalctl': ('Bash', 'Views system logs from the journal.'),
+        'crontab': ('Bash', 'Schedules commands to run automatically at specified times.'),
+        'echo': ('Bash', 'Prints text to the terminal output.'),
+        'export': ('Bash', 'Sets an environment variable for the current session.'),
+        # Git
+        'git': ('Git', 'Runs a Git version control operation.'),
+        # Docker
+        'docker': ('Docker', 'Runs a Docker container management command.'),
+        'docker-compose': ('Docker', 'Manages multi-container Docker applications.'),
+        # Kubernetes
+        'kubectl': ('Kubernetes', 'Sends commands to a Kubernetes cluster.'),
+        'helm': ('Kubernetes', 'Manages Kubernetes application packages (charts).'),
+        # Python
+        'python': ('Python', 'Runs a Python script or starts the Python interpreter.'),
+        'python3': ('Python', 'Runs a Python 3 script or starts the Python 3 interpreter.'),
+        'pip': ('Python', 'Installs or manages Python packages.'),
+        'pip3': ('Python', 'Installs or manages Python 3 packages.'),
+        # Node
+        'node': ('JavaScript', 'Runs a JavaScript file in the Node.js runtime.'),
+        'npm': ('JavaScript', 'Manages Node.js packages and runs scripts.'),
+        'npx': ('JavaScript', 'Runs a Node.js package without installing it globally.'),
+        'yarn': ('JavaScript', 'Manages Node.js packages (alternative to npm).'),
+        # Rust
+        'cargo': ('Rust', 'Builds, tests, or manages Rust projects and dependencies.'),
+        'rustc': ('Rust', 'Compiles Rust source code into a binary.'),
+        # Go
+        'go': ('Go', 'Runs a Go toolchain command (build, run, test, etc.).'),
+        # Terraform
+        'terraform': ('Terraform', 'Manages infrastructure as code (plan, apply, destroy).'),
+        # Ansible
+        'ansible': ('Ansible', 'Runs Ansible automation tasks on remote machines.'),
+        'ansible-playbook': ('Ansible', 'Executes an Ansible playbook for configuration management.'),
+        # Nginx
+        'nginx': ('Nginx', 'Controls the Nginx web server.'),
+    }
+
     def detect_language(self, snippet: str) -> dict:
-        """Detect the programming language/tool from a code snippet."""
+        """Detect the programming language/tool from a code snippet.
+        Uses fingerprint pattern matching with rule-based confidence boosting
+        for known CLI binaries to prevent underscoring short inputs."""
         scores = {}
         lines = snippet.strip().split("\n")
+
+        # ── High-Signal Syntax Patterns ──
+        # Patterns so definitive that matching even one guarantees a confidence floor.
+        # These are NOT the same as KNOWN_BINARIES (which handle CLI commands).
+        # These handle structural language syntax that is unambiguous.
+        HIGH_SIGNAL_PATTERNS = {
+            "Python": [
+                r"^\s*def\s+\w+\s*\(.*\)\s*(->\s*\w+)?\s*:",    # def function():
+                r"^\s*class\s+\w+(\(.*\))?\s*:",                  # class Foo(Bar):
+                r"^\s*if\s+__name__\s*==\s*['\"]__main__['\"]",    # if __name__ == '__main__'
+                r"^\s*(import|from)\s+\w+",                        # import/from
+            ],
+            "JavaScript": [
+                r"^\s*function\s+\w+\s*\(",                        # function foo(
+                r"^\s*(const|let|var)\s+\w+\s*=",                  # const x =
+                r"\bconsole\.(log|warn|error|info)\s*\(",          # console.log(
+                r"^\s*(module\.exports|export\s+(default|const|function|class))\b",
+            ],
+            "TypeScript": [
+                r"^\s*interface\s+\w+",                            # interface Foo
+                r"^\s*type\s+\w+\s*=",                             # type Foo =
+                r":\s*(string|number|boolean|void|any|never|unknown)\b",
+            ],
+            "Rust": [
+                r"^\s*fn\s+\w+\s*(<.*>)?\s*\(",                   # fn main(
+                r"^\s*(pub|mod|use|impl|trait|struct|enum)\b",     # pub struct
+                r"^\s*#\[(derive|cfg|test)\b",                     # #[derive(
+            ],
+            "Go": [
+                r"^\s*func\s+(\(\w+\s+\*?\w+\)\s+)?\w+\s*\(",   # func main(
+                r"^\s*package\s+\w+",                              # package main
+            ],
+            "SQL": [
+                r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b",
+            ],
+            "Docker": [
+                r"^\s*(FROM|RUN|CMD|ENTRYPOINT|COPY|ADD|EXPOSE|ENV|ARG|WORKDIR)\b",
+            ],
+            "Kubernetes": [
+                r"^\s*apiVersion:\s*",                             # apiVersion:
+                r"^\s*kind:\s*(Pod|Deployment|Service|ConfigMap|Secret|Ingress)\b",
+            ],
+            "Java": [
+                r"^\s*(public|private|protected)\s+(static\s+)?(void|int|String|boolean)\s+\w+\s*\(",
+                r"^\s*import\s+java\.",
+            ],
+            "PHP": [
+                r"<\?php",                                         # <?php
+            ],
+            "Ruby": [
+                r"\b(puts|require|require_relative|attr_accessor|attr_reader)\b",
+            ],
+        }
 
         for lang, patterns, priority in FINGERPRINTS:
             score = 0
@@ -397,12 +521,58 @@ class BibleEngine:
                         matched_patterns.append(pattern)
                         break  # one match per pattern is enough
             if score > 0:
+                # Base confidence from pattern density
+                base_confidence = min(1.0, len(matched_patterns) / max(3, len(patterns) * 0.5))
+
+                # High-signal boost: if any matched pattern is definitively identifying,
+                # enforce a minimum confidence floor of 0.65
+                high_sigs = HIGH_SIGNAL_PATTERNS.get(lang, [])
+                has_high_signal = False
+                if high_sigs:
+                    for mp in matched_patterns:
+                        for hs in high_sigs:
+                            if mp == hs:
+                                has_high_signal = True
+                                break
+                        if has_high_signal:
+                            break
+
+                if has_high_signal:
+                    base_confidence = max(base_confidence, 0.65)
+
                 scores[lang] = {
                     "score": score,
                     "matches": len(matched_patterns),
                     "matched_patterns": matched_patterns,
                     "total_patterns": len(patterns),
-                    "confidence": min(1.0, len(matched_patterns) / max(3, len(patterns) * 0.5))
+                    "confidence": base_confidence
+                }
+
+        # ── Rule-based binary boost ──
+        # Extract leading token to check against known binaries
+        first_line = snippet.strip().split("\n")[0].strip()
+        # Strip leading shebang, comments, sudo
+        clean_first = re.sub(r'^(#!.*\n|\s*sudo\s+)', '', first_line).strip()
+        lead_token = clean_first.split()[0] if clean_first.split() else ''
+        # Normalize: strip paths like /usr/bin/chmod -> chmod
+        lead_token = lead_token.rsplit('/', 1)[-1].lower()
+
+        binary_hit = self.KNOWN_BINARIES.get(lead_token)
+        if binary_hit:
+            binary_lang, binary_summary = binary_hit
+            # Boost: if this language already matched, raise its confidence floor
+            if binary_lang in scores:
+                scores[binary_lang]["confidence"] = max(
+                    scores[binary_lang]["confidence"], 0.70
+                )
+            else:
+                # Inject a synthetic match for the known binary
+                scores[binary_lang] = {
+                    "score": 10,
+                    "matches": 1,
+                    "matched_patterns": [f"binary:{lead_token}"],
+                    "total_patterns": 1,
+                    "confidence": 0.75
                 }
 
         if not scores:
@@ -458,8 +628,41 @@ class BibleEngine:
         }
 
     # ─── Safety Check ────────────────────────────────────────
+    # Grounded safety descriptions — actionable, not abstract.
+    SAFETY_CONTEXT = {
+        'chmod': 'This command modifies file permissions. Safe in most cases, but ensure the file is trusted before executing.',
+        'chown': 'This changes file ownership. Requires appropriate privileges and affects who can access the file.',
+        'chgrp': 'This changes group ownership of a file. Safe when targeting known files.',
+        'rm': 'This deletes files. Double-check the target path before running — deletion is usually permanent.',
+        'mv': 'This moves or renames files. The original location will no longer contain the file.',
+        'cp': 'This copies files. Safe operation — originals are preserved.',
+        'mkdir': 'This creates a new directory. Safe, non-destructive operation.',
+        'git': 'This is a Git version control operation. Most Git commands are safe and reversible.',
+        'docker': 'This runs a Docker container command. Container changes are isolated from your host system.',
+        'kubectl': 'This sends a command to a Kubernetes cluster. Verify you are targeting the correct cluster and namespace.',
+        'pip': 'This installs or manages Python packages. Packages are installed into your current environment.',
+        'pip3': 'This installs or manages Python packages. Packages are installed into your current environment.',
+        'npm': 'This manages Node.js packages. Packages are installed into the project or global directory.',
+        'yarn': 'This manages Node.js packages. Packages are installed into the project directory.',
+        'apt': 'This installs or modifies system packages. May require sudo and affects system-wide state.',
+        'brew': 'This installs or manages macOS packages. Packages install into the Homebrew prefix directory.',
+        'sudo': 'This runs the following command with elevated privileges. Ensure you trust the operation before proceeding.',
+        'curl': 'This transfers data to/from a URL. Safe for reading; inspect the response before piping to other commands.',
+        'wget': 'This downloads a file from the internet. Verify the URL is from a trusted source.',
+        'ssh': 'This opens a secure shell connection. Ensure the target host is trusted.',
+        'systemctl': 'This controls system services. Starting/stopping services affects system behavior.',
+        'terraform': 'This manages cloud infrastructure. Plan first — apply changes can create or destroy real resources.',
+        'ansible': 'This runs automation tasks on remote machines. Changes will be applied to the targeted hosts.',
+        'ansible-playbook': 'This executes an Ansible playbook. Changes will be applied to the targeted hosts.',
+        'cargo': 'This manages a Rust project. Build and test operations are safe; publish is permanent.',
+        'go': 'This runs a Go toolchain command. Build and test operations are safe.',
+        'node': 'This runs JavaScript in Node.js. The script will have access to your filesystem.',
+        'python': 'This runs a Python script. The script will have access to your filesystem.',
+        'python3': 'This runs a Python 3 script. The script will have access to your filesystem.',
+    }
+
     def check_safety(self, snippet: str) -> dict:
-        """Evaluate snippet safety."""
+        """Evaluate snippet safety with grounded, actionable descriptions."""
         warnings = []
         for pattern, desc in DANGEROUS_PATTERNS:
             if re.search(pattern, snippet, re.IGNORECASE):
@@ -475,7 +678,15 @@ class BibleEngine:
         elif safe_notes:
             return {"level": "SAFE", "warnings": [], "safe_notes": safe_notes}
         else:
-            return {"level": "CAUTION", "warnings": [], "safe_notes": ["Operation lacks explicitly recognized safe boundaries. Execution requires context validation."]}
+            # Generate grounded context instead of abstract warning
+            first_line = snippet.strip().split("\n")[0].strip()
+            clean = re.sub(r'^\s*sudo\s+', '', first_line).strip()
+            lead = clean.split()[0].rsplit('/', 1)[-1].lower() if clean.split() else ''
+            grounded = self.SAFETY_CONTEXT.get(lead,
+                'This operation does not match any known safe or dangerous pattern. '
+                'Review the command and verify the target before executing.'
+            )
+            return {"level": "CAUTION", "warnings": [], "safe_notes": [grounded]}
 
     # ─── FTS5 Search ─────────────────────────────────────────
     def _format_tier(self, raw_tier: str) -> str:
@@ -750,16 +961,148 @@ class BibleEngine:
         if len(first_line) > 80:
             first_line = first_line[:77] + "..."
 
+        # 9. Quick Understanding — one-line plain-English explanation
+        quick_understanding = self._generate_quick_understanding(
+            snippet, detected_lang, first_line
+        )
+
         return {
             "input": first_line,
             "language": detection,
             "safety": safety,
             "keywords": keywords + concepts,
             "breakdown": self.decompose_snippet(snippet),
+            "quick_understanding": quick_understanding,
             "results": results[:15],
             "result_count": len(results),
             "total_fragments": self._get_total_count(),
         }
+
+    def _generate_quick_understanding(self, snippet: str, lang: str, first_line: str) -> str:
+        """Generate a one-line plain-English explanation of what the snippet does.
+        Uses known binary summaries first, then falls back to decomposition."""
+        # 1. Check known binary — instant clarity
+        clean = re.sub(r'^\s*(#!.*\n|\s*sudo\s+)', '', snippet.strip()).strip()
+        tokens = clean.split()
+        lead = tokens[0].rsplit('/', 1)[-1].lower() if tokens else ''
+
+        binary_hit = self.KNOWN_BINARIES.get(lead)
+        if binary_hit:
+            _, base_summary = binary_hit
+            # Enhance with specific arguments if available
+            return self._enhance_binary_summary(lead, tokens, base_summary)
+
+        # 2. Multi-line: summarize by concept pattern count
+        lines = snippet.strip().split('\n')
+        if len(lines) == 1:
+            return f"A single {lang or 'code'} statement."
+
+        concepts_found = set()
+        for line in lines:
+            for pattern, concept in self.CONCEPT_PATTERNS:
+                if re.search(pattern, line.strip(), re.IGNORECASE):
+                    concepts_found.add(concept)
+                    break
+
+        if concepts_found:
+            concept_list = ', '.join(sorted(concepts_found)[:3])
+            return f"A {lang} snippet covering {concept_list} across {len(lines)} lines."
+
+        return f"A {len(lines)}-line {lang or 'code'} snippet."
+
+    def _enhance_binary_summary(self, binary: str, tokens: list, base: str) -> str:
+        """Add argument-specific detail to a known binary's summary."""
+        args = tokens[1:] if len(tokens) > 1 else []
+        if not args:
+            return base
+
+        if binary == 'chmod':
+            # e.g. chmod +x deploy.sh -> "Makes deploy.sh executable so it can be run as a script."
+            flags = [a for a in args if a.startswith(('+', '-')) or a.isdigit()]
+            files = [a for a in args if not a.startswith(('-', '+')) and not a.isdigit()]
+            if '+x' in flags and files:
+                return f"Makes {files[-1]} executable so it can be run as a script."
+            elif '777' in ' '.join(flags):
+                return f"Sets full read/write/execute permissions for everyone on {files[-1] if files else 'the target'}."
+            elif files:
+                return f"Changes file permissions on {files[-1]}."
+        elif binary == 'git':
+            sub = args[0] if args else ''
+            sub_map = {
+                'clone': f"Downloads a copy of a remote repository to your machine.",
+                'commit': f"Saves your staged changes as a new commit in the repository.",
+                'push': f"Uploads your local commits to the remote repository.",
+                'pull': f"Downloads and merges remote changes into your current branch.",
+                'add': f"Stages files for the next commit.",
+                'status': f"Shows which files have been modified, staged, or are untracked.",
+                'log': f"Displays the commit history of the repository.",
+                'diff': f"Shows the differences between your working files and the last commit.",
+                'merge': f"Combines another branch's changes into your current branch.",
+                'rebase': f"Replays your commits on top of another branch's history.",
+                'checkout': f"Switches to a different branch or restores files.",
+                'branch': f"Lists, creates, or deletes branches.",
+                'stash': f"Temporarily saves uncommitted changes so you can work on something else.",
+                'reset': f"Undoes commits or unstages files, depending on the flags used.",
+                'init': f"Creates a new Git repository in the current directory.",
+                'fetch': f"Downloads remote changes without merging them.",
+                'tag': f"Creates a named marker for a specific commit (like a version label).",
+                'remote': f"Manages the list of remote repositories linked to this project.",
+            }
+            return sub_map.get(sub, f"Runs a Git '{sub}' operation.")
+        elif binary == 'docker':
+            sub = args[0] if args else ''
+            sub_map = {
+                'build': 'Builds a container image from a Dockerfile.',
+                'run': 'Creates and starts a new container from an image.',
+                'exec': 'Runs a command inside a running container.',
+                'compose': 'Manages multi-container applications defined in docker-compose.yml.',
+                'pull': 'Downloads a container image from a registry.',
+                'push': 'Uploads a container image to a registry.',
+                'ps': 'Lists currently running containers.',
+                'stop': 'Stops a running container.',
+                'rm': 'Removes a stopped container.',
+                'logs': 'Shows the output logs of a container.',
+                'images': 'Lists all downloaded container images.',
+            }
+            return sub_map.get(sub, f"Runs a Docker '{sub}' command.")
+        elif binary == 'kubectl':
+            sub = args[0] if args else ''
+            sub_map = {
+                'get': 'Retrieves information about Kubernetes resources.',
+                'apply': 'Creates or updates resources from a configuration file.',
+                'delete': 'Removes resources from the cluster.',
+                'describe': 'Shows detailed information about a specific resource.',
+                'logs': 'Displays logs from a container in a pod.',
+                'exec': 'Runs a command inside a container in a pod.',
+                'scale': 'Changes the number of replicas for a deployment.',
+                'port-forward': 'Forwards a local port to a port on a pod.',
+            }
+            return sub_map.get(sub, f"Runs a kubectl '{sub}' operation on the cluster.")
+        elif binary in ('pip', 'pip3'):
+            sub = args[0] if args else ''
+            if sub == 'install':
+                pkgs = [a for a in args[1:] if not a.startswith('-')]
+                if pkgs:
+                    return f"Installs the Python package{'s' if len(pkgs)>1 else ''} {', '.join(pkgs[:3])}."
+                return 'Installs Python packages.'
+            elif sub == 'uninstall':
+                return 'Removes a Python package from the current environment.'
+            elif sub == 'freeze':
+                return 'Lists all installed Python packages and their versions.'
+        elif binary in ('npm', 'yarn'):
+            sub = args[0] if args else ''
+            if sub == 'install' or sub == 'add':
+                pkgs = [a for a in args[1:] if not a.startswith('-')]
+                if pkgs:
+                    return f"Installs the package{'s' if len(pkgs)>1 else ''} {', '.join(pkgs[:3])} into the project."
+                return 'Installs project dependencies from package.json.'
+            elif sub == 'run':
+                script = args[1] if len(args) > 1 else 'a'
+                return f"Runs the '{script}' script defined in package.json."
+            elif sub == 'init':
+                return 'Creates a new package.json file for the project.'
+
+        return base
 
     def _get_total_count(self) -> int:
         """Get total fragment count."""
@@ -771,39 +1114,53 @@ class BibleEngine:
 
     # ─── Stats ───────────────────────────────────────────────
     def get_stats(self) -> dict:
-        """Get Bible database statistics."""
+        """Get Bible database statistics — uses canonical normalized source prefixes."""
         try:
             total = self._get_total_count()
+            # NOTE: normalize_sources.py has rewritten source prefixes to canonical
+            # labels (e.g. 'typescript/', 'ansible/', 'powershell/').  This CASE
+            # statement checks canonical prefixes FIRST, then falls back to URL
+            # pattern matching for any fragments not yet normalized.
             domains = self.conn.execute("""
                 SELECT
                     CASE
-                        WHEN source LIKE '%python%' OR source LIKE '%docs.python.org%' THEN 'Python'
-                        WHEN source LIKE '%nginx%' THEN 'Nginx'
-                        WHEN source LIKE '%golang%' OR source LIKE '%go.dev%' OR source LIKE '%pkg.go.dev%' THEN 'Go'
-                        WHEN source LIKE '%linux%' OR source LIKE '%binutils%' OR source LIKE '%man7.org%' OR source LIKE '%sourceware.org%' THEN 'Linux'
-                        WHEN source LIKE '%systemd%' OR source LIKE '%freedesktop.org%' THEN 'systemd'
-                        WHEN source LIKE '%nodejs%' OR source LIKE '%node.js%' OR source LIKE '%npmjs%' THEN 'Node.js'
-                        WHEN source LIKE '%ruby%' THEN 'Ruby'
-                        WHEN source LIKE '%rust%' OR source LIKE '%doc.rust-lang%' OR source LIKE '%docs.rs%' THEN 'Rust'
-                        WHEN source LIKE '%mysql%' OR source LIKE '%mariadb%' THEN 'MySQL'
-                        WHEN source LIKE '%typescript%' OR source LIKE '%typescriptlang%' THEN 'TypeScript'
-                        WHEN source LIKE '%php%' THEN 'PHP'
-                        WHEN source LIKE '%postgresql%' OR source LIKE '%postgres%' THEN 'PostgreSQL'
-                        WHEN source LIKE '%powershell%' OR source LIKE '%microsoft.com/powershell%' THEN 'PowerShell'
-                        WHEN source LIKE '%java%' AND source NOT LIKE '%javascript%' THEN 'Java'
-                        WHEN source LIKE '%ansible%' THEN 'Ansible'
-                        WHEN source LIKE '%docker%' THEN 'Docker'
-                        WHEN source LIKE '%kubernetes%' OR source LIKE '%k8s%' THEN 'Kubernetes'
-                        WHEN source LIKE '%git-scm%' OR source LIKE 'git/%' THEN 'Git'
-                        WHEN source LIKE '%bash%' OR source LIKE '%gnu.org/software/bash%' THEN 'Bash'
-                        WHEN source LIKE 'c/%' OR source LIKE 'cpp/%' OR source LIKE '%cppreference%' THEN 'C/C++'
-                        WHEN source LIKE 'css/%' OR source LIKE '%/CSS/%' THEN 'CSS'
-                        WHEN source LIKE 'html/%' OR source LIKE '%/HTML/%' THEN 'HTML'
-                        WHEN source LIKE 'terraform/%' OR source LIKE '%hashicorp%' THEN 'Terraform'
-                        WHEN source LIKE 'csharp/%' OR source LIKE '%dotnet/csharp%' THEN 'C#'
-                        WHEN source LIKE 'sql/%' OR source LIKE '%w3schools%sql%' THEN 'SQL'
-                        WHEN source LIKE 'kotlin/%' OR source LIKE '%kotlinlang%' THEN 'Kotlin'
-                        WHEN source LIKE 'swift/%' OR source LIKE '%swift.org%' THEN 'Swift'
+                        -- ── Canonical normalized prefixes (post-normalize_sources.py) ──
+                        WHEN source LIKE 'python/%'      OR source LIKE '%docs.python.org%'                      THEN 'Python'
+                        WHEN source LIKE 'javascript/%'  OR source LIKE '%nodejs%' OR source LIKE '%npmjs%'      THEN 'JavaScript'
+                        WHEN source LIKE 'typescript/%'  OR source LIKE '%typescriptlang%'                       THEN 'TypeScript'
+                        WHEN source LIKE 'rust/%'        OR source LIKE '%doc.rust-lang%' OR source LIKE '%docs.rs%' THEN 'Rust'
+                        WHEN source LIKE 'golang/%'      OR source LIKE '%go.dev%' OR source LIKE '%pkg.go.dev%' THEN 'Go'
+                        WHEN source LIKE 'ruby/%'        OR source LIKE '%ruby%'                                 THEN 'Ruby'
+                        WHEN source LIKE 'php/%'         OR source LIKE '%php.net%'                              THEN 'PHP'
+                        WHEN source LIKE 'java/%'        AND source NOT LIKE '%javascript%'
+                                                         AND source NOT LIKE '%typescript%'                      THEN 'Java'
+                        WHEN source LIKE 'bash/%'        OR source LIKE '%gnu.org/software/bash%'
+                                                         OR source LIKE '%tldp.org%'                             THEN 'Bash'
+                        WHEN source LIKE 'powershell/%'  OR source LIKE '%microsoft.com/powershell%'             THEN 'PowerShell'
+                        WHEN source LIKE 'sql/%'         OR source LIKE '%mysql%' OR source LIKE '%mariadb%'
+                                                         OR source LIKE '%postgresql%' OR source LIKE '%postgres%'
+                                                         OR source LIKE '%sqlite%'                               THEN 'SQL'
+                        WHEN source LIKE 'docker/%'      OR source LIKE '%docker.com%'                           THEN 'Docker'
+                        WHEN source LIKE 'kubernetes/%'  OR source LIKE '%k8s%'                                  THEN 'Kubernetes'
+                        WHEN source LIKE 'nginx/%'       OR source LIKE '%nginx.org%'                            THEN 'Nginx'
+                        WHEN source LIKE 'systemd/%'     OR source LIKE '%freedesktop.org%'                      THEN 'systemd'
+                        WHEN source LIKE 'git/%'         OR source LIKE '%git-scm%'                              THEN 'Git'
+                        WHEN source LIKE 'ansible/%'     OR source LIKE '%ansible.com%'                          THEN 'Ansible'
+                        WHEN source LIKE 'css/%'         OR source LIKE '%/CSS/%'                                THEN 'CSS'
+                        WHEN source LIKE 'html/%'        OR source LIKE '%/HTML/%'                               THEN 'HTML'
+                        WHEN source LIKE 'yaml/%'                                                                THEN 'YAML'
+                        WHEN source LIKE 'json/%'                                                                THEN 'JSON'
+                        WHEN source LIKE 'terraform/%'   OR source LIKE '%hashicorp%'                            THEN 'Terraform'
+                        WHEN source LIKE 'csharp/%'      OR source LIKE '%dotnet/csharp%'                        THEN 'C#'
+                        WHEN source LIKE 'kotlin/%'      OR source LIKE '%kotlinlang%'                           THEN 'Kotlin'
+                        WHEN source LIKE 'c/%'           OR source LIKE 'cpp/%' OR source LIKE '%cppreference%'  THEN 'C/C++'
+                        WHEN source LIKE 'swift/%'       OR source LIKE '%swift.org%'                            THEN 'Swift'
+                        WHEN source LIKE 'linux/%'       OR source LIKE '%linux%' OR source LIKE '%man7.org%'
+                                                         OR source LIKE '%sourceware.org%'                       THEN 'Linux'
+                        WHEN source LIKE 'node/%'        OR source LIKE '%node.js%'                              THEN 'Node.js'
+                        WHEN source LIKE 'mysql/%'                                                               THEN 'MySQL'
+                        WHEN source LIKE 'postgresql/%'  OR source LIKE '%postgres%'                             THEN 'PostgreSQL'
+                        WHEN source LIKE 'linux-tools/%' OR source LIKE '%binutils%'                             THEN 'Linux'
                         ELSE 'Other'
                     END as domain,
                     COUNT(*) as count
@@ -812,13 +1169,19 @@ class BibleEngine:
                 ORDER BY count DESC
             """).fetchall()
 
+            # Filter out 'Other' if it's tiny (< 1% of total) — cosmetic cleanliness
+            threshold = max(50, int(total * 0.005))
+            filtered = [
+                {"name": row["domain"], "count": row["count"],
+                 "color": DOMAIN_COLORS.get(row["domain"], "#666")}
+                for row in domains
+                if row["count"] >= threshold or row["domain"] != "Other"
+            ]
+
             return {
                 "total_fragments": total,
-                "domains": [
-                    {"name": row["domain"], "count": row["count"],
-                     "color": DOMAIN_COLORS.get(row["domain"], "#666")}
-                    for row in domains
-                ]
+                "domains": filtered,
             }
         except Exception as e:
             return {"error": str(e), "total_fragments": 0, "domains": []}
+

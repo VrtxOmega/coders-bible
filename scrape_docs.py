@@ -1,4 +1,4 @@
-"""Multi-source documentation scraper for Coder's Bible."""
+"""Multi-source documentation scraper for The Coder's Bible."""
 import requests, sqlite3, hashlib, time, re, os, sys, json
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -91,193 +91,205 @@ def scrape_git():
 
     return frags
 
-# ── Bash (GNU manual) ──
+# ── Bash ── (bulk GitHub tree walker)
 def scrape_bash():
-    print("\n=== Scraping Bash manual ===")
-    html = fetch("https://tiswww.case.edu/php/chet/bash/bashref.html")
-    if not html: 
-        html = fetch("https://www.gnu.org/software/bash/manual/bash.html")
-    if not html: return []
-    
-    # Split by h2 tags as requested by Hermes
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup.find_all(["script", "style", "nav"]):
-        tag.decompose()
-        
+    print("\n=== Scraping Bash docs (bulk) ===")
     frags = []
-    # If the page is structured with h2
-    sections = soup.find_all("h2")
-    if sections:
-        for i in range(len(sections)):
-            sec_title = sections[i].get_text(strip=True)
-            content = []
-            curr = sections[i].next_sibling
-            while curr and curr.name != "h2":
-                if hasattr(curr, "get_text"):
-                    content.append(curr.get_text(separator="\n", strip=True))
-                curr = curr.next_sibling
-            
-            text = "\n".join(content)
+    # 1. GNU Bash manual HTML
+    for url, src in [
+        ("https://www.gnu.org/software/bash/manual/bash.html", "bash/manual@gnu.org"),
+        ("https://tiswww.case.edu/php/chet/bash/bashref.html", "bash/bashref@tiswww"),
+    ]:
+        html = fetch(url)
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup.find_all(["script","style","nav"]): tag.decompose()
+            for sec in soup.find_all(["h2","h3"]):
+                content, curr = [], sec.next_sibling
+                while curr and getattr(curr, 'name', None) not in ["h2","h3"]:
+                    if hasattr(curr, "get_text"): content.append(curr.get_text(separator="\n", strip=True))
+                    curr = getattr(curr, 'next_sibling', None)
+                text = sec.get_text(strip=True) + "\n" + "\n".join(content)
+                for c in chunk_text(text, 1200):
+                    frags.append({"content": c, "source": src, "tier": "A"})
+    # 2. bash-guide + pure-bash-bible on GitHub
+    for repo, branch, prefix in [
+        ("dylanaraps/pure-bash-bible", "master", "pure-bash-bible"),
+        ("anordal/shellharden", "master", "shellharden"),
+    ]:
+        r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+        if r.status_code == 200:
+            for item in r.json().get("tree", []):
+                if item["path"].endswith((".md",".txt",".bash",".sh")) and item["type"]=="blob":
+                    text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{item['path']}")
+                    if text:
+                        for c in chunk_text(text):
+                            frags.append({"content": c, "source": f"bash/{prefix}/{item['path']}@github.com", "tier": "A"})
+    # 3. TLDP Advanced Bash Guide
+    for page in ["abs-guide.html"]:
+        html = fetch(f"https://tldp.org/LDP/abs/{page}")
+        if html:
+            text = extract_text(html)
             for c in chunk_text(text, 1200):
-                frags.append({"content": f"{sec_title}\n{c}", "source": "bash/manual@tiswww.case.edu", "tier": "A"})
-    else:
-        text = extract_text(html)
-        for c in chunk_text(text, 1200):
-            frags.append({"content": c, "source": "bash/manual@tiswww.case.edu", "tier": "A"})
-            
-    print(f"  Total: {len(frags)} chunks")
+                frags.append({"content": c, "source": f"bash/abs-guide@tldp.org", "tier": "B"})
+    print(f"  Bash total: {len(frags)} chunks")
     return frags
 
 # ── Docker (docs.docker.com) ──
 def scrape_docker():
-    print("\n=== Scraping Docker docs ===")
-    pages = [
-        "build","commit","compose","container","context","cp","create",
-        "diff","events","exec","export","history","image","images",
-        "import","info","inspect","kill","load","login","logout",
-        "logs","manifest","network","node","pause","plugin","port",
-        "ps","pull","push","rename","restart","rm","rmi","run",
-        "save","search","secret","service","stack","start","stats",
-        "stop","swarm","system","tag","top","unpause","update",
-        "version","volume","wait",
-    ]
+    print("\n=== Scraping Docker docs (Raw Markdown) ===")
     frags = []
-    for p in pages:
-        html = fetch(f"https://docs.docker.com/reference/cli/docker/{p}/")
-        if not html: continue
-        text = extract_text(html)
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"docker/{p}@docs.docker.com", "tier": "A"})
-        print(f"  docker {p}: {len(chunk_text(text))} chunks")
+    try:
+        r = requests.get("https://api.github.com/repos/docker/docs/git/trees/main?recursive=1", headers=HEADERS)
+        if r.status_code == 200:
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree if t["path"].startswith("content/") and t["path"].endswith(".md")]
+        else:
+            files = []
+        
+        for f in files:
+            url = f"https://raw.githubusercontent.com/docker/docs/main/{f}"
+            text = fetch(url)
+            if not text: continue
+            for c in chunk_text(text):
+                frags.append({"content": c, "source": f"docker/{f}@github.com", "tier": "A"})
+            print(f"  docker/{os.path.basename(f)}: {len(chunk_text(text))} chunks")
+    except Exception as e:
+        print(f"  Docker error: {e}")
     return frags
 
-# ── Kubernetes (kubernetes.io) ──
+# ── Kubernetes ── (multi-repo bulk walker)
 def scrape_kubernetes():
-    print("\n=== Scraping Kubernetes docs ===")
-    pages = [
-        "overview/","concepts/overview/working-with-objects/",
-        "concepts/workloads/pods/","concepts/workloads/controllers/deployment/",
-        "concepts/workloads/controllers/statefulset/",
-        "concepts/workloads/controllers/daemonset/",
-        "concepts/workloads/controllers/job/",
-        "concepts/services-networking/service/",
-        "concepts/services-networking/ingress/",
-        "concepts/storage/volumes/","concepts/storage/persistent-volumes/",
-        "concepts/configuration/configmap/","concepts/configuration/secret/",
-        "concepts/scheduling-eviction/assign-pod-node/",
-        "concepts/cluster-administration/logging/",
-        "concepts/security/rbac-good-practices/",
-        "tasks/configure-pod-container/configure-liveness-readiness-startup-probes/",
-        "tasks/manage-kubernetes-objects/declarative-config/",
-        "tasks/run-application/horizontal-pod-autoscale/",
-    ]
+    print("\n=== Scraping Kubernetes docs (bulk) ===")
     frags = []
-    for p in pages:
-        html = fetch(f"https://kubernetes.io/docs/{p}")
-        if not html: continue
-        text = extract_text(html)
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"kubernetes/{p.strip('/')}@kubernetes.io", "tier": "A"})
-        print(f"  k8s/{p.strip('/')}: {len(chunk_text(text))} chunks")
+    repos = [
+        ("kubernetes/website", "main",   "content/en/docs/"),
+        ("kubernetes/community", "master", ""),
+        ("kelseyhightower/kubernetes-the-hard-way", "master", ""),
+        ("kubernetes/examples", "master", ""),
+        ("kubernetes-sigs/kustomize", "master", "docs/"),
+    ]
+    for repo, branch, prefix in repos:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+            if r.status_code != 200:
+                print(f"  tree fail {repo}: {r.status_code}")
+                continue
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree
+                     if t["path"].endswith(".md") and t["type"]=="blob"
+                     and (not prefix or t["path"].startswith(prefix))]
+            print(f"  {repo}: {len(files)} files")
+            for f in files:
+                text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{f}")
+                if not text: continue
+                for c in chunk_text(text):
+                    frags.append({"content": c, "source": f"kubernetes/{f}@github.com", "tier": "A"})
+        except Exception as e:
+            print(f"  k8s error {repo}: {e}")
+    print(f"  Kubernetes total: {len(frags)} chunks")
     return frags
 
-# ── C/C++ (cppreference.com) ──
+# ── C/C++ ── (multi-repo bulk walker)
 def scrape_cpp():
-    print("\n=== Scraping C/C++ reference ===")
-    pages_c = [
-        "c/language/main_function","c/language/for","c/language/while",
-        "c/language/if","c/language/switch","c/language/struct",
-        "c/language/union","c/language/enum","c/language/pointer",
-        "c/language/array","c/language/typedef","c/language/operator_precedence",
-        "c/io/printf","c/io/scanf","c/io/fopen","c/io/fclose",
-        "c/io/fread","c/io/fwrite","c/io/fprintf","c/io/fscanf",
-        "c/string/byte/strlen","c/string/byte/strcpy","c/string/byte/strcmp",
-        "c/string/byte/strcat","c/string/byte/memcpy","c/string/byte/memset",
-        "c/memory/malloc","c/memory/calloc","c/memory/realloc","c/memory/free",
-        "c/numeric/math/sqrt","c/numeric/math/pow","c/numeric/math/abs",
-    ]
-    pages_cpp = [
-        "cpp/container/vector","cpp/container/map","cpp/container/unordered_map",
-        "cpp/container/set","cpp/container/list","cpp/container/deque",
-        "cpp/container/array","cpp/container/stack","cpp/container/queue",
-        "cpp/string/basic_string","cpp/io/cout","cpp/io/cin",
-        "cpp/io/basic_fstream","cpp/algorithm/sort","cpp/algorithm/find",
-        "cpp/algorithm/binary_search","cpp/algorithm/for_each",
-        "cpp/algorithm/transform","cpp/algorithm/accumulate",
-        "cpp/memory/unique_ptr","cpp/memory/shared_ptr","cpp/memory/weak_ptr",
-        "cpp/thread/thread","cpp/thread/mutex","cpp/thread/lock_guard",
-        "cpp/language/lambda","cpp/language/range-for","cpp/language/auto",
-        "cpp/language/class","cpp/language/templates","cpp/language/exceptions",
-        "cpp/utility/optional","cpp/utility/variant","cpp/utility/tuple",
-    ]
+    print("\n=== Scraping C/C++ docs (bulk) ===")
     frags = []
-    for p in pages_c + pages_cpp:
-        html = fetch(f"https://en.cppreference.com/w/{p}")
-        if not html: continue
-        text = extract_text(html, "#mw-content-text")
-        lang = "c" if p.startswith("c/") else "cpp"
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"{lang}/{p}@cppreference.com", "tier": "A"})
-        print(f"  {p}: {len(chunk_text(text))} chunks")
+    repos = [
+        ("MicrosoftDocs/cpp-docs", "main",   ["docs/cpp/", "docs/standard-library/", "docs/c-runtime-library/"]),
+        ("cppreference/cppreference-doc", "master", [""]),
+        ("isocpp/CppCoreGuidelines", "master", [""]),
+        ("fffaraz/awesome-cpp", "master",     [""]),
+    ]
+    for repo, branch, prefixes in repos:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+            if r.status_code != 200:
+                print(f"  tree fail {repo}: {r.status_code}")
+                continue
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree
+                     if t["path"].endswith(".md") and t["type"]=="blob"
+                     and any(t["path"].startswith(p) for p in prefixes)]
+            print(f"  {repo}: {len(files)} files")
+            for f in files:
+                text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{f}")
+                if not text: continue
+                for c in chunk_text(text):
+                    frags.append({"content": c, "source": f"c/{f}@github.com", "tier": "A"})
+        except Exception as e:
+            print(f"  C/C++ error {repo}: {e}")
+    print(f"  C/C++ total: {len(frags)} chunks")
     return frags
 
-# ── CSS/HTML via MDN ──
+# ── CSS / HTML ── (MDN + bulk GitHub walker)
 def scrape_mdn_web():
-    print("\n=== Scraping MDN Web docs (CSS/HTML) ===")
-    css_pages = [
-        "display","position","flexbox","grid","float","margin","padding",
-        "border","background","color","font","text-align","transform",
-        "transition","animation","box-shadow","opacity","z-index",
-        "overflow","visibility","cursor","pseudo-classes","pseudo-elements",
-        "media_queries","variables","calc","clamp","min","max",
-        "Specificity","Cascade","Inheritance","Box_model",
-    ]
-    html_pages = [
-        "Element/div","Element/span","Element/a","Element/p","Element/h1",
-        "Element/ul","Element/ol","Element/li","Element/table","Element/form",
-        "Element/input","Element/button","Element/select","Element/textarea",
-        "Element/img","Element/video","Element/audio","Element/canvas",
-        "Element/section","Element/article","Element/nav","Element/header",
-        "Element/footer","Element/main","Element/aside","Element/details",
-        "Element/dialog","Element/template","Element/slot",
-    ]
+    print("\n=== Scraping CSS/HTML docs (bulk) ===")
     frags = []
-    for p in css_pages:
-        html = fetch(f"https://developer.mozilla.org/en-US/docs/Web/CSS/{p}")
-        if not html: continue
-        text = extract_text(html, "article")
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"css/{p}@developer.mozilla.org", "tier": "A"})
-        print(f"  CSS/{p}: {len(chunk_text(text))} chunks")
-    for p in html_pages:
-        html = fetch(f"https://developer.mozilla.org/en-US/docs/Web/HTML/{p}")
-        if not html: continue
-        text = extract_text(html, "article")
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"html/{p}@developer.mozilla.org", "tier": "A"})
-        print(f"  HTML/{p}: {len(chunk_text(text))} chunks")
+    # 1. MDN CSS — all properties from mdn/content
+    repos_css_html = [
+        ("mdn/content", "main", "files/en-us/web/css/",  "css"),
+        ("mdn/content", "main", "files/en-us/web/html/", "html"),
+    ]
+    for repo, branch, prefix, domain in repos_css_html:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+            if r.status_code != 200:
+                print(f"  tree fail {repo}/{prefix}: {r.status_code}")
+                continue
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree
+                     if t["path"].lower().startswith(prefix)
+                     and t["path"].endswith(".md") and t["type"]=="blob"]
+            print(f"  {repo}/{prefix}: {len(files)} files")
+            for f in files:
+                text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{f}")
+                if not text: continue
+                for c in chunk_text(text):
+                    frags.append({"content": c, "source": f"{domain}/{f}@github.com", "tier": "A"})
+        except Exception as e:
+            print(f"  MDN {domain} error: {e}")
+    # 2. CSS-Tricks almanac (GitHub mirror)
+    try:
+        r = requests.get("https://api.github.com/repos/nicktaylor/css-almanac/git/trees/master?recursive=1", headers=HEADERS)
+        if r.status_code == 200:
+            for t in r.json().get("tree",[]):
+                if t["path"].endswith(".md"):
+                    text = fetch(f"https://raw.githubusercontent.com/nicktaylor/css-almanac/master/{t['path']}")
+                    if text:
+                        for c in chunk_text(text):
+                            frags.append({"content": c, "source": f"css/almanac/{t['path']}@github.com", "tier": "B"})
+    except Exception: pass
+    # 3. HTML spec living standard sections
+    for section in ["semantics","forms","dom","scripting","browsers","microdata","interaction"]:
+        html = fetch(f"https://html.spec.whatwg.org/multipage/{section}.html")
+        if html:
+            text = extract_text(html)
+            for c in chunk_text(text, 1400):
+                frags.append({"content": c, "source": f"html/spec/{section}@whatwg.org", "tier": "A"})
+    print(f"  CSS/HTML total: {len(frags)} chunks")
     return frags
 
 # ── Java (dev.java) ──
 def scrape_java():
-    print("\n=== Scraping Java docs ===")
-    pages = [
-        "learn/getting-started/","learn/language-basics/variables.html",
-        "learn/language-basics/operators.html","learn/language-basics/control-flow.html",
-        "learn/classes-objects/","learn/interfaces/",
-        "learn/generics/","learn/exceptions/","learn/lambdas/",
-        "learn/streams/","learn/collections/","learn/date-time/",
-        "learn/io/","learn/concurrency/","learn/modules/",
-        "learn/records/","learn/sealed-classes/","learn/pattern-matching/",
-    ]
+    print("\n=== Scraping Java docs (Raw Markdown) ===")
     frags = []
-    for p in pages:
-        html = fetch(f"https://dev.java/{p}")
-        if not html: continue
-        text = extract_text(html)
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"java/{p.strip('/')}@dev.java", "tier": "A"})
-        print(f"  java/{p.strip('/')}: {len(chunk_text(text))} chunks")
+    try:
+        r = requests.get("https://api.github.com/repos/java/devjava-content/git/trees/main?recursive=1", headers=HEADERS)
+        if r.status_code == 200:
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree if t["path"].startswith("app/pages/") and t["path"].endswith(".md")]
+        else:
+            files = []
+            
+        for f in files:
+            url = f"https://raw.githubusercontent.com/java/devjava-content/main/{f}"
+            text = fetch(url)
+            if not text: continue
+            for c in chunk_text(text):
+                frags.append({"content": c, "source": f"java/{os.path.basename(f)}@github.com", "tier": "A"})
+            print(f"  java/{os.path.basename(f)}: {len(chunk_text(text))} chunks")
+    except Exception as e:
+        print(f"  Java error: {e}")
     return frags
 
 # ── Terraform ──
@@ -318,27 +330,34 @@ def scrape_terraform():
             print(f"  Terraform JSON error on {p}: {e}")
     return frags
 
-# ── C# / .NET ──
+# ── C# / .NET ── (bulk GitHub tree walker)
 def scrape_csharp():
-    print("\n=== Scraping C# docs ===")
-    pages = [
-        "csharp/fundamentals/types/","csharp/fundamentals/object-oriented/",
-        "csharp/fundamentals/functional/pattern-matching",
-        "csharp/language-reference/keywords/","csharp/language-reference/operators/",
-        "csharp/language-reference/statements/","csharp/programming-guide/generics/",
-        "csharp/asynchronous-programming/","csharp/linq/",
-        "csharp/programming-guide/exceptions/",
-        "csharp/programming-guide/delegates/",
-        "csharp/programming-guide/events/",
-    ]
+    print("\n=== Scraping C# docs (bulk) ===")
     frags = []
-    for p in pages:
-        html = fetch(f"https://learn.microsoft.com/en-us/dotnet/{p}")
-        if not html: continue
-        text = extract_text(html)
-        for c in chunk_text(text):
-            frags.append({"content": c, "source": f"csharp/{p}@learn.microsoft.com", "tier": "A"})
-        print(f"  csharp/{p}: {len(chunk_text(text))} chunks")
+    repos = [
+        ("dotnet/docs",         "main",   ["docs/csharp/", "docs/standard/"]),
+        ("dotnet/csharplang",   "main",   ["proposals/", "spec/"]),
+        ("MicrosoftDocs/azure-docs", "main", ["articles/azure-functions/"]),
+    ]
+    for repo, branch, prefixes in repos:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+            if r.status_code != 200:
+                print(f"  tree fail {repo}: {r.status_code}")
+                continue
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree
+                     if t["path"].endswith(".md") and t["type"]=="blob"
+                     and any(t["path"].startswith(p) for p in prefixes)]
+            print(f"  {repo}: {len(files)} files")
+            for f in files:
+                text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{f}")
+                if not text: continue
+                for c in chunk_text(text):
+                    frags.append({"content": c, "source": f"csharp/{f}@github.com", "tier": "A"})
+        except Exception as e:
+            print(f"  C# error {repo}: {e}")
+    print(f"  C# total: {len(frags)} chunks")
     return frags
 
 # ── SQL (generic) ──
@@ -388,28 +407,50 @@ def scrape_sql():
         
     return frags
 
-# ── Kotlin ──
+# ── Kotlin ── (bulk GitHub tree walker)
 def scrape_kotlin():
-    print("\n=== Scraping Kotlin docs ===")
-    pages = [
-        "basic-syntax.html","basic-types.html","strings.html",
-        "control-flow.html","returns.html","classes.html",
-        "inheritance.html","properties.html","interfaces.html",
-        "data-classes.html","sealed-classes.html","generics.html",
-        "enum-classes.html","object-declarations.html","delegation.html",
-        "functions.html","lambdas.html","collections-overview.html",
-        "sequences.html","coroutines-overview.html","null-safety.html",
-        "exceptions.html","annotations.html","destructuring-declarations.html",
-        "scope-functions.html","operator-overloading.html",
-    ]
+    print("\n=== Scraping Kotlin docs (bulk) ===")
     frags = []
+    repos = [
+        ("JetBrains/kotlin",              "master", ["docs/", "libraries/stdlib/"]),
+        ("Kotlin/kotlinx.coroutines",      "master", ["docs/"]),
+        ("Kotlin/kotlinx.serialization",   "master", ["docs/"]),
+        ("Kotlin/kotlin-in-action",        "master", [""]),
+        ("MindorksOpenSource/From-Java-To-Kotlin", "master", [""]),
+    ]
+    for repo, branch, prefixes in repos:
+        try:
+            r = requests.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1", headers=HEADERS)
+            if r.status_code != 200:
+                print(f"  tree fail {repo}: {r.status_code}")
+                continue
+            tree = r.json().get("tree", [])
+            files = [t["path"] for t in tree
+                     if t["path"].endswith(".md") and t["type"]=="blob"
+                     and any(t["path"].startswith(p) for p in prefixes)]
+            print(f"  {repo}: {len(files)} files")
+            for f in files:
+                text = fetch(f"https://raw.githubusercontent.com/{repo}/{branch}/{f}")
+                if not text: continue
+                for c in chunk_text(text):
+                    frags.append({"content": c, "source": f"kotlin/{f}@github.com", "tier": "A"})
+        except Exception as e:
+            print(f"  Kotlin error {repo}: {e}")
+    # kotlinlang.org HTML (original 26 pages still valuable)
+    pages = ["basic-syntax","basic-types","strings","control-flow","classes",
+             "inheritance","properties","interfaces","data-classes","sealed-classes",
+             "generics","enum-classes","functions","lambdas","collections-overview",
+             "sequences","coroutines-overview","null-safety","exceptions",
+             "annotations","scope-functions","operator-overloading",
+             "delegation","object-declarations","inline-functions","extension-functions",
+             "functional","type-aliases","destructuring-declarations","returns"]
     for p in pages:
-        html = fetch(f"https://kotlinlang.org/docs/{p}")
+        html = fetch(f"https://kotlinlang.org/docs/{p}.html")
         if not html: continue
         text = extract_text(html, "article")
         for c in chunk_text(text):
             frags.append({"content": c, "source": f"kotlin/{p}@kotlinlang.org", "tier": "A"})
-        print(f"  kotlin/{p}: {len(chunk_text(text))} chunks")
+    print(f"  Kotlin total: {len(frags)} chunks")
     return frags
 
 # ── Swift ──
@@ -439,6 +480,14 @@ def scrape_swift():
     return frags
 
 # ═══════════════════════════════════════
+# Google ecosystem (Gemini, Vertex AI, GCP, Firebase, Android, TF, JAX)
+# ═══════════════════════════════════════
+try:
+    from scrape_google import GOOGLE_SCRAPERS
+except ImportError:
+    GOOGLE_SCRAPERS = []
+
+# ═══════════════════════════════════════
 # Main
 # ═══════════════════════════════════════
 ALL_SCRAPERS = [
@@ -454,7 +503,7 @@ ALL_SCRAPERS = [
     ("SQL", scrape_sql),
     ("Kotlin", scrape_kotlin),
     ("Swift", scrape_swift),
-]
+] + GOOGLE_SCRAPERS
 
 def main():
     # Allow running specific scrapers via CLI args

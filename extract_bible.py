@@ -1,6 +1,6 @@
 """
 Extract Bible fragments from omega_brain.db into a standalone coders_bible.db.
-This separates the Coder's Bible data from the Omega Brain operational database.
+This separates the The Coder's Bible data from the Omega Brain operational database.
 """
 
 import sqlite3
